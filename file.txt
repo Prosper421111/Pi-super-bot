@@ -1,0 +1,351 @@
+import threading
+
+import time
+
+import requests
+
+import random
+
+import logging
+
+from threading import Lock
+
+
+
+def run_bot(wallet_phrase, wallet_address, trials=10, machine_gun=True, test_mode=True):
+
+    api_url = 'https://api.pi-network.dev/v1'
+
+
+
+    # --- Config based on mode ---
+
+    if machine_gun:
+
+        BASE_SLEEP = 0.005
+
+        JITTER = 0.002
+
+        MAX_REQUESTS_PER_SECOND = 50
+
+    else:
+
+        BASE_SLEEP = 0.2
+
+        JITTER = 0.05
+
+        MAX_REQUESTS_PER_SECOND = 5
+
+
+
+    logging.basicConfig(
+
+        level=logging.INFO,
+
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+
+        datefmt="%H:%M:%S"
+
+    )
+
+
+
+    # -----------------------------
+
+    # Rate limiter
+
+    # -----------------------------
+
+    class RateLimiter:
+
+        def __init__(self, max_per_second):
+
+            self.capacity = float(max_per_second)
+
+            self.tokens = float(self.capacity)
+
+            self.last = time.monotonic()
+
+            self.lock = Lock()
+
+
+
+        def wait_for_token(self):
+
+            while True:
+
+                with self.lock:
+
+                    now = time.monotonic()
+
+                    elapsed = now - self.last
+
+                    self.last = now
+
+                    self.tokens += elapsed * self.capacity
+
+                    if self.tokens > self.capacity:
+
+                        self.tokens = self.capacity
+
+                    if self.tokens >= 1.0:
+
+                        self.tokens -= 1.0
+
+                        return
+
+                time.sleep(0.0005)
+
+
+
+    rate_limiter = RateLimiter(MAX_REQUESTS_PER_SECOND)
+
+
+
+    backoff_lock = Lock()
+
+    backoff_seconds = 0.0
+
+
+
+    def increase_backoff():
+
+        nonlocal backoff_seconds
+
+        with backoff_lock:
+
+            if backoff_seconds < 0.5:
+
+                backoff_seconds = 0.5
+
+            else:
+
+                backoff_seconds = min(5.0, backoff_seconds * 2.0)
+
+
+
+    def maybe_backoff_sleep():
+
+        with backoff_lock:
+
+            b = backoff_seconds
+
+        if b > 0:
+
+            logging.warning(f"Backing off for {b:.2f}s due to earlier 429s.")
+
+            time.sleep(b)
+
+
+
+    # -----------------------------
+
+    # API helper
+
+    # -----------------------------
+
+    def api_call(method, url, headers=None, json=None):
+
+        rate_limiter.wait_for_token()
+
+        maybe_backoff_sleep()
+
+
+
+        if test_mode:
+
+            logging.debug(f"[TEST_MODE] {method} {url} {json}")
+
+            if '/wallet/login' in url:
+
+                return ({'token': 'FAKE_TOKEN'}, 200)
+
+            if '/wallet/pending' in url:
+
+                return ([], 200)
+
+            if '/wallet/locked' in url:
+
+                return ([], 200)
+
+            if '/wallet/available' in url:
+
+                return (0, 200)
+
+            return ({'ok': True}, 200)
+
+
+
+        try:
+
+            resp = requests.request(method, url, headers=headers, json=json, timeout=5)
+
+            data = resp.json()
+
+            return (data, resp.status_code)
+
+        except Exception as e:
+
+            logging.error(f"API error: {e}")
+
+            return (None, None)
+
+
+
+    # -----------------------------
+
+    # Bot actions
+
+    # -----------------------------
+
+    def login():
+
+        if test_mode:
+
+            return 'FAKE_TOKEN'
+
+        headers = {'Content-Type': 'application/json'}
+
+        payload = {'phrase': wallet_phrase}
+
+        data, status = api_call('POST', api_url + '/wallet/login', headers=headers, json=payload)
+
+        return data.get('token') if data else None
+
+
+
+    def check_pending(token):
+
+        confirmations = 0
+
+        while confirmations < trials:
+
+            headers = {'Authorization': f'Bearer {token}'}
+
+            data, status = api_call('GET', api_url + '/wallet/pending', headers=headers)
+
+            if isinstance(data, list):
+
+                for tx in data:
+
+                    if tx.get('type') == 'Mining' and tx.get('state') == 'Pending':
+
+                        api_call('POST', api_url + f"/wallet/confirm/{tx['id']}", headers=headers)
+
+                        confirmations += 1
+
+                        logging.info(f"[pending] Confirmed {confirmations}/{trials}")
+
+                        if confirmations >= trials:
+
+                            break
+
+            time.sleep(BASE_SLEEP + random.random() * JITTER)
+
+
+
+    def check_locked(token):
+
+        transfers = 0
+
+        while transfers < trials:
+
+            headers = {'Authorization': f'Bearer {token}'}
+
+            data, status = api_call('GET', api_url + '/wallet/locked', headers=headers)
+
+            now = int(time.time())
+
+            if isinstance(data, list):
+
+                for tx in data:
+
+                    if tx.get('unlock_date', now + 1) <= now:
+
+                        api_call('POST', api_url + f"/wallet/transfer/{tx['id']}?type=available", headers=headers)
+
+                        transfers += 1
+
+                        logging.info(f"[locked] Transferred {transfers}/{trials}")
+
+                        if transfers >= trials:
+
+                            break
+
+            time.sleep(BASE_SLEEP + random.random() * JITTER)
+
+
+
+    def check_available(token):
+
+        sends = 0
+
+        while sends < trials:
+
+            headers = {'Authorization': f'Bearer {token}'}
+
+            data, status = api_call('GET', api_url + '/wallet/available', headers=headers)
+
+            amt = None
+
+            if isinstance(data, (int, float)):
+
+                amt = data
+
+            elif isinstance(data, dict) and 'amount' in data:
+
+                amt = data['amount']
+
+            if amt and amt > 0:
+
+                api_call('POST', api_url + '/wallet/send', headers=headers,
+
+                         json={'to': wallet_address, 'amount': amt})
+
+                sends += 1
+
+                logging.info(f"[available] Sent {amt} ({sends}/{trials})")
+
+            time.sleep(BASE_SLEEP + random.random() * JITTER)
+
+
+
+    # -----------------------------
+
+    # MAIN
+
+    # -----------------------------
+
+    token = login()
+
+    if not token:
+
+        logging.error("Login failed.")
+
+        return
+
+
+
+    threads = [
+
+        threading.Thread(target=check_pending, args=(token,)),
+
+        threading.Thread(target=check_locked, args=(token,)),
+
+        threading.Thread(target=check_available, args=(token,))
+
+    ]
+
+
+
+    for t in threads:
+
+        t.start()
+
+    for t in threads:
+
+        t.join()
+
+
+
+    logging.info("Bot finished after trials.")
