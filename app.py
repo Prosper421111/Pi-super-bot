@@ -1,20 +1,19 @@
 import streamlit as st
-import threading
-from bot import main
+from bot import run_bot
 
-st.title("🚀 PI Bot Interface")
+st.title("🚀 PI Super Bot")
 
-phrase = st.text_area("Wallet Phrase", type="password")
-address = st.text_input("Receiver Wallet Address")
-trials = st.number_input("Trials", min_value=1, max_value=100, value=10)
-machine_gun = st.checkbox("Machine Gun Mode", value=True)
-test_mode = st.checkbox("Test Mode", value=True)
+# Input fields
+phrase = st.text_input("Enter your Wallet Phrase", type="password")
+address = st.text_input("Enter Destination Wallet Address")
+trials = st.number_input("Number of Trials", min_value=1, max_value=100, value=10)
+machine_gun = st.checkbox("Machine Gun Mode (Super Fast)", value=True)
+test_mode = st.checkbox("Test Mode (Safe Simulation)", value=True)
 
+# Run button
 if st.button("Start Bot"):
-    st.success("Bot started! Logs will appear in the console.")
-    # Run in background thread so Streamlit doesn’t freeze
-    threading.Thread(
-        target=main,
-        args=(phrase, address, trials, machine_gun, test_mode),
-        daemon=True
-    ).start()
+    if not phrase or not address:
+        st.error("Please enter both Wallet Phrase and Destination Address.")
+    else:
+        st.success("Bot started! Logs will appear in the console.")
+        run_bot(phrase, address, trials, machine_gun, test_mode)
