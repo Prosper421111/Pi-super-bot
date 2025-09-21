@@ -2,7 +2,7 @@ import streamlit as st
 
 import threading
 
-from bot import run_bot
+from bot import main
 
 
 
