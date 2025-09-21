@@ -1,11 +1,11 @@
 import streamlit as st
 from bot import run_bot
 
-st.title("🚀 Pi Super Bot (API Only)")
+st.title("🚀 Pi Super Bot (Mainnet)")
 
 wallet_phrase = st.text_input("Enter your Wallet Phrase", type="password")
 to_address = st.text_input("Enter Destination Wallet Address")
-runtime = st.number_input("Bot Runtime (seconds)", min_value=10, max_value=600, value=30)
+runtime = st.number_input("Bot Runtime (seconds)", min_value=10, max_value=600, value=60)
 
 log_area = st.empty()    # Live log area
 locked_area = st.empty() # Show total locked balance
@@ -19,4 +19,4 @@ if st.button("Start Bot"):
         if total_locked is not None:
             locked_area.success(f"Total Locked Balance: {total_locked} PI")
         else:
-            locked_area.error("Failed to fetch locked balance / login failed")
+            locked_area.error("❌ Failed to fetch locked balance or login failed")
